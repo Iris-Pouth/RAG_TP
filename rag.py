@@ -1,133 +1,68 @@
-import sys
-import io
-import os
+"""Assistant médicaments en ligne de commande.
+
+Exemples :
+    python rag.py                                         # conversation avec historique
+    python rag.py --ask "Le Doliprane 1000 est-il remboursé ?"
+    python rag.py --no-reformulation                      # sans reformulation des questions
+"""
+
 import argparse
-from dotenv import load_dotenv
+import sys
 
-# UTF-8 safe (Windows fix)
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+from src.pipeline import RAGPipeline, Retrieval
 
-load_dotenv()
-
-if not os.getenv("GROQ_API_KEY"):
-    print(" GROQ_API_KEY manquante dans le fichier .env")
-    sys.exit(1)
-
-from src.embedder import charger_modele, charger_index
-from src.agents import RetrieverAgent, GeneratorAgent
+sys.stdout.reconfigure(encoding="utf-8")  # accents corrects dans la console Windows
 
 
-# ─────────────────────────────────────────────
-def log(title, msg):
-    print(f"\n[{title}] {msg}")
+def print_sources(retrieval: Retrieval) -> None:
+    if retrieval.search_query != retrieval.question:
+        print(f"\n↪ Question reformulée : {retrieval.search_query}")
+    if retrieval.keywords:
+        print(f"Recherche ciblée sur : {', '.join(retrieval.keywords)}")
+    print(f"Confiance : {retrieval.confidence:.0%} ({retrieval.label})")
+    for i, (chunk, score) in enumerate(retrieval.results, start=1):
+        print(f"  [{i}] {chunk.source}  (similarité {score:.2f})  {chunk.url}")
 
 
-def print_bar():
-    print("-" * 60)
+def answer(pipeline: RAGPipeline, question: str) -> None:
+    retrieval = pipeline.retrieve(question)
+    for text in pipeline.stream_answer(retrieval):
+        print(text, end="", flush=True)
+    print()
+    print_sources(retrieval)
 
 
-# ─────────────────────────────────────────────
-def afficher_sources(chunks):
-    print("\n SOURCES UTILISÉES\n")
-
-    for i, c in enumerate(chunks, 1):
-        nom = c["metadata"].get("denomination", "Inconnu")
-        type_c = c["metadata"].get("type_chunk", "?")
-        score = c["score"]
-
-        print(f"{i}. {nom} [{type_c}]")
-        print(f"   score: {score:.1%}")
-
-
-# ─────────────────────────────────────────────
-def main(avec_reformulation=True):
-
-    print("=" * 60)
-    print("⚕️ ASSISTANT MÉDICAMENTS RAG (BDPM + GROQ)")
-    print("=" * 60)
-
-    print("\nArchitecture : Retriever → Generator → Réponse")
-
-    # ── Chargement ───────────────────────────
-    log("SETUP", "Chargement du modèle et de la base...")
-
-    try:
-        modele = charger_modele()
-        index, chunks = charger_index()
-    except FileNotFoundError as e:
-        print(f" Erreur : {e}")
-        sys.exit(1)
-
-    retriever = RetrieverAgent(modele, index, chunks, avec_reformulation)
-    generator = GeneratorAgent()
-
-    mode = "reformulation ON" if avec_reformulation else "standard"
-    log("OK", f"Système prêt ({mode})")
-
-    print("\nCommandes : 'quit' | 'sources'")
-    print_bar()
-
-    history = []
-    last_chunks = []
-
-    # ── LOOP ────────────────────────────────
-    while True:
-
-        try:
-            question = input("\n Question : ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print("\n Bye")
-            break
-
-        if not question:
-            continue
-
-        if question.lower() in ["quit", "exit", "q"]:
-            print("\n Bye")
-            break
-
-        if question.lower() == "sources":
-            if last_chunks:
-                afficher_sources(last_chunks)
-            continue
-
-        # ── Retriever ───────────────────────
-        log("R1", "Recherche des documents...")
-
-        res = retriever.run(question, historique=history)
-
-        if res["reformulee"]:
-            print(f"↪ reformulation : {res['question_recherche']}")
-
-        print(f"score max : {res['meilleur_score']:.1%}")
-
-        if not res["confiance_ok"]:
-            print("\n Aucune information fiable trouvée.")
-            print("Consultez un professionnel de santé.")
-            continue
-
-        chunks = res["resultats"]
-        last_chunks = chunks
-
-        print(f"{len(chunks)} chunks récupérés")
-
-        # ── Generator ───────────────────────
-        log("R2", "Génération de la réponse...")
-
-        answer = generator.run(question, chunks, historique=history)
-
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": answer})
-
-        print_bar()
-        print(answer)
-        print_bar()
-
-
-# ─────────────────────────────────────────────
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--no-bonus", action="store_true")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Assistant médicaments (BDPM + Claude)")
+    parser.add_argument("--ask", metavar="QUESTION", help="poser une seule question")
+    parser.add_argument("--no-reformulation", action="store_true",
+                        help="désactiver la reformulation des questions de suivi")
     args = parser.parse_args()
 
-    main(avec_reformulation=not args.no_bonus)
+    pipeline = RAGPipeline(reformulation=not args.no_reformulation)
+    if not pipeline.load_index():
+        sys.exit("Aucun index trouvé. Lance d'abord : python indexer.py")
+
+    if args.ask:
+        answer(pipeline, args.ask)
+        return
+
+    print("Assistant médicaments — information uniquement, ne remplace pas un avis médical.")
+    print("Commandes : « reset » efface l'historique, « quit » pour sortir.")
+    while True:
+        try:
+            question = input("\nVous > ").strip()
+        except (KeyboardInterrupt, EOFError):
+            break
+        if question.lower() in {"quit", "exit", "q"}:
+            break
+        if question.lower() == "reset":
+            pipeline.reset_history()
+            print("Historique effacé.")
+        elif question:
+            print("Assistant > ", end="")
+            answer(pipeline, question)
+
+
+if __name__ == "__main__":
+    main()

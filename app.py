@@ -1,115 +1,93 @@
+"""Interface Streamlit.  Lancement : streamlit run app.py"""
+
 import streamlit as st
-import os
-from dotenv import load_dotenv
-from src.embedder import charger_modele, charger_index
-from src.agents import RetrieverAgent, GeneratorAgent
 
-# ── Config page ─────────────────────────────
-st.set_page_config(
-    page_title="MediAssist",
-    page_icon="⚕️",
-    layout="wide"
-)
+from src import config
+from src.pipeline import RAGPipeline
 
-# ── Style simple ────────────────────────────
-st.markdown("""
-<style>
-html, body, [data-testid="stAppViewContainer"] {
-    background-color: #ffffff;
-    color: #1f2937;
-}
+st.set_page_config(page_title="MediAssist", page_icon="⚕️", layout="wide")
 
-[data-testid="stSidebar"] {
-    background-color: #f9fafb;
-}
 
-button {
-    background-color: #0D9DA8 !important;
-    color: white !important;
-    border-radius: 6px !important;
-}
+@st.cache_resource(show_spinner="Chargement du modèle et de l'index…")
+def get_pipeline() -> RAGPipeline | None:
+    # Créé une seule fois, puis réutilisé entre les interactions (le modèle est long à charger)
+    pipeline = RAGPipeline()
+    return pipeline if pipeline.load_index() else None
 
-[data-testid="stChatInputContainer"] {
-    background-color: #f3f4f6 !important;
-    border-radius: 8px !important;
-}
-</style>
-""", unsafe_allow_html=True)
 
-# ── Env ─────────────────────────────────────
-load_dotenv()
-
-if not os.getenv("GROQ_API_KEY"):
-    st.error("Clé API manquante (.env)")
+pipeline = get_pipeline()
+if pipeline is None:
+    st.error("Aucun index trouvé. Lance d'abord : `python indexer.py`")
     st.stop()
 
-# ── Init RAG ────────────────────────────────
-@st.cache_resource
-def init_rag():
-    modele = charger_modele()
-    index, chunks = charger_index()
-    retriever = RetrieverAgent(modele, index, chunks, avec_reformulation=True)
-    generator = GeneratorAgent()
-    return retriever, generator
-
-retriever, generator = init_rag()
-
-# ── Session state ───────────────────────────
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = []  # ce qui est affiché à l'écran
 
-# ── Sidebar ─────────────────────────────────
+# ---------- Barre latérale ----------
 with st.sidebar:
     st.title("⚕️ MediAssist")
-    st.caption("Assistant médicaments")
+    st.caption("Base de Données Publique des Médicaments + Claude")
+    st.metric("Passages indexés", f"{len(pipeline.store):,}".replace(",", " "))
 
-    st.divider()
+    st.header("Réglages")
+    top_k = st.slider("Passages retrouvés (top k)", 1, 10, config.TOP_K)
+    min_score = st.slider("Similarité minimale", 0.0, 1.0, config.MIN_SCORE, 0.05)
+    pipeline.reformulation = st.toggle("Reformuler les questions de suivi",
+                                       value=config.REFORMULATION)
 
-    st.metric("Questions", len([m for m in st.session_state.messages if m["role"] == "user"]))
-
-    st.divider()
-
-    if st.button("Nouvelle session"):
+    if st.button("Nouvelle conversation", use_container_width=True):
+        pipeline.reset_history()
         st.session_state.messages = []
         st.rerun()
 
-    st.caption(" ⚠️ Ne remplace pas un avis médical")
+    st.warning("Information uniquement : ne remplace pas l'avis d'un médecin "
+               "ou d'un pharmacien.", icon="⚠️")
 
-# ── Header ──────────────────────────────────
-st.title("⚕️ Assistant Médicaments")
-st.caption("Pose tes questions sur les médicaments simplement")
+# ---------- Conversation ----------
+st.title("Assistant médicaments")
+st.caption("Composition, prix, remboursement, conditions de prescription, avis de la HAS…")
 
-# ── Chat history ────────────────────────────
+COLORS = {"élevée": "green", "moyenne": "orange", "faible": "red"}
+
+
+def show_details(details: dict) -> None:
+    if details["search_query"] != details["question"]:
+        st.caption(f"↪ Question reformulée : {details['search_query']}")
+    if details["keywords"]:
+        st.caption(f"Recherche ciblée sur : {', '.join(details['keywords'])}")
+    label = details["label"]
+    st.markdown(f"Confiance : :{COLORS[label]}[**{details['confidence']:.0%} ({label})**]")
+    if details["sources"]:
+        with st.expander("Sources"):
+            for i, (name, score, url, text) in enumerate(details["sources"], start=1):
+                st.markdown(f"**[{i}] [{name}]({url})** · similarité {score:.2f}")
+                st.caption(text)
+
+
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        if "details" in msg:
+            show_details(msg["details"])
 
-# ── Input user ──────────────────────────────
-if prompt := st.chat_input("Ex : effets secondaires du paracétamol ?"):
-
+if question := st.chat_input("Ex : le Doliprane 1000 mg est-il remboursé ?"):
+    st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(question)
 
     with st.chat_message("assistant"):
-        with st.spinner("Recherche..."):
+        with st.spinner("Recherche dans la base…"):
+            retrieval = pipeline.retrieve(question, top_k=top_k, min_score=min_score)
+        answer = st.write_stream(pipeline.stream_answer(retrieval))
+        details = {
+            "question": retrieval.question,
+            "search_query": retrieval.search_query,
+            "keywords": retrieval.keywords,
+            "confidence": retrieval.confidence,
+            "label": retrieval.label,
+            "sources": [(c.source, s, c.url, c.text) for c, s in retrieval.results],
+        }
+        show_details(details)
 
-            historique = [
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ]
-
-            resultat = retriever.run(prompt, historique=historique)
-
-            if not resultat["confiance_ok"]:
-                reponse = "Je n'ai pas trouvé d'information pertinente dans la base."
-            else:
-                chunks = resultat["resultats"]
-                reponse = generator.run(prompt, chunks, historique=historique)
-
-            st.markdown(reponse)
-
-    # sauvegarde
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    st.session_state.messages.append({"role": "assistant", "content": reponse})
-
-    st.rerun()
+    st.session_state.messages.append({"role": "assistant", "content": answer,
+                                      "details": details})

@@ -1,61 +1,41 @@
+"""Télécharge la BDPM et construit l'index FAISS.
+
+Exemples :
+    python indexer.py                 # médicaments commercialisés (~13 600)
+    python indexer.py --all           # tous les médicaments, y compris arrêtés
+    python indexer.py --download      # force le re-téléchargement des fichiers
+"""
+
+import argparse
 import sys
-import io
 import time
-from src.loader import charger_medicaments
-from src.chunker import chunker_medicaments
-from src.embedder import charger_modele, creer_index, sauvegarder_index
 
-# UTF-8 safe output (Windows fix)
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+from src import bdpm, config
+from src.pipeline import RAGPipeline
 
-
-def log(step, message):
-    print(f"\n[{step}] {message}")
+sys.stdout.reconfigure(encoding="utf-8")  # accents corrects dans la console Windows
 
 
-def main():
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Indexation de la BDPM")
+    parser.add_argument("--all", action="store_true",
+                        help="inclure les médicaments non commercialisés")
+    parser.add_argument("--download", action="store_true",
+                        help="re-télécharger les fichiers même s'ils existent")
+    args = parser.parse_args()
+
     start = time.time()
 
-    print("=" * 60)
-    print("   ⚕️ INDEXATION - Assistant Médicaments RAG")
-    print("=" * 60)
+    print("[1/3] Données BDPM")
+    bdpm.download(config.DATA_DIR, force=args.download)
 
-    try:
-        # ─────────────────────────────
-        log("1/4", "Chargement des données BDPM...")
-        t0 = time.time()
-        medicaments = charger_medicaments()
-        print(f"   ✔ {len(medicaments)} médicaments chargés ({time.time()-t0:.1f}s)")
+    print("[2/3] Chargement du modèle d'embeddings")
+    pipeline = RAGPipeline()  # pas besoin de clé API pour indexer
 
-        # ─────────────────────────────
-        log("2/4", "Découpage en chunks...")
-        t0 = time.time()
-        chunks = chunker_medicaments(medicaments, taille_max=500, overlap=50)
-        print(f"   ✔ {len(chunks)} chunks créés ({time.time()-t0:.1f}s)")
+    print("[3/3] Découpage, embeddings et index FAISS (quelques minutes)")
+    n = pipeline.build_index(only_commercialised=not args.all)
 
-        # ─────────────────────────────
-        log("3/4", "Chargement du modèle d'embedding...")
-        t0 = time.time()
-        modele = charger_modele()
-        print(f"   ✔ Modèle chargé ({time.time()-t0:.1f}s)")
-
-        # ─────────────────────────────
-        log("4/4", "Création de l'index FAISS...")
-        t0 = time.time()
-        index = creer_index(chunks, modele)
-        sauvegarder_index(index, chunks)
-        print(f"   ✔ Index sauvegardé ({time.time()-t0:.1f}s)")
-
-        # ─────────────────────────────
-        total = time.time() - start
-        print("\n" + "=" * 60)
-        print(f"   Indexation terminée en {total:.1f}s")
-        print("=" * 60)
-
-    except Exception as e:
-        print("\n❌ ERREUR pendant l'indexation :")
-        print(e)
-        sys.exit(1)
+    print(f"\n{n} passages indexés dans {config.INDEX_DIR} en {time.time() - start:.0f} s")
 
 
 if __name__ == "__main__":
