@@ -103,6 +103,7 @@ Les tests utilisent des fichiers BDPM miniatures et remplacent le modèle d'embe
 - **Pourquoi remettre les scores à l'échelle ?** Les similarités d'e5 sont resserrées (~0,75 pour un texte sans rapport, ~0,90 pour un texte très proche) : un score brut de 0,83 ne veut pas dire « 83 % de confiance ».
 - **Pourquoi `IndexFlatIP` ?** Recherche exacte, rapide pour quelques dizaines de milliers de vecteurs ; avec des vecteurs normalisés, le produit scalaire est la similarité cosinus.
 - **Limites de la BDPM** — elle ne contient pas les notices (posologie, effets indésirables, contre-indications) : l'assistant le dit et oriente vers un professionnel de santé.
+- **Questions par symptôme** — « un médicament contre la toux pour enfant » donne de mauvais résultats : la BDPM ne décrit pas les indications, la recherche ne peut donc pas relier un symptôme à un médicament. L'assistant marche bien quand la question cite un médicament ou une substance.
 - **Claude** — modèle et niveau de réflexion (`CLAUDE_EFFORT`) réglables dans `.env`. En cas de refus du modèle, l'API relance la requête sur un modèle de secours (`USE_FALLBACK`).
 
 ## Pistes d'amélioration
