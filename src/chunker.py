@@ -17,7 +17,7 @@ class Chunk:
         return FICHE_URL.format(cis=self.cis) if self.cis else ""
 
 
-def split_text(text: str, chunk_size: int = 500, overlap: int = 100) -> list[str]:
+def split_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> list[str]:
     """Découpe un texte en morceaux d'environ `chunk_size` caractères.
 
     - On coupe de préférence à la fin d'une phrase, sinon entre deux mots.
@@ -59,7 +59,7 @@ def split_text(text: str, chunk_size: int = 500, overlap: int = 100) -> list[str
     return [c for c in chunks if c]
 
 
-def chunk_medicament(med: Medicament, chunk_size: int = 500, overlap: int = 100) -> list[Chunk]:
+def chunk_medicament(med: Medicament, chunk_size: int = 1000, overlap: int = 150) -> list[Chunk]:
     """Découpe la fiche d'un médicament.
 
     Le nom du médicament est répété en tête de chaque morceau : sinon, un morceau
@@ -77,6 +77,6 @@ def chunk_medicament(med: Medicament, chunk_size: int = 500, overlap: int = 100)
     ]
 
 
-def chunk_medicaments(meds: list[Medicament], chunk_size: int = 500,
-                      overlap: int = 100) -> list[Chunk]:
+def chunk_medicaments(meds: list[Medicament], chunk_size: int = 1000,
+                      overlap: int = 150) -> list[Chunk]:
     return [chunk for med in meds for chunk in chunk_medicament(med, chunk_size, overlap)]

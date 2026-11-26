@@ -25,8 +25,11 @@ class FakeEmbedder:
         "question hors sujet": unit([0, -1, 0]),
     }
 
-    def encode(self, texts):
+    def encode_passages(self, texts):
         return np.stack([self.vectors[t] for t in texts])
+
+    def encode_query(self, question):
+        return self.vectors[question]
 
 
 class FakeLLM:
@@ -45,7 +48,7 @@ class FakeLLM:
 def make_pipeline(reformulation=False):
     pipeline = RAGPipeline(embedder=FakeEmbedder(), llm=FakeLLM(), reformulation=reformulation)
     texts = ["fiche alpha", "fiche beta", "fiche gamma"]
-    pipeline.store.add(pipeline.embedder.encode(texts),
+    pipeline.store.add(pipeline.embedder.encode_passages(texts),
                        [Chunk(t, t.upper(), cis=str(i)) for i, t in enumerate(texts)])
     pipeline.keywords = KeywordIndex({"BETAMED": [1]})
     return pipeline
@@ -53,10 +56,13 @@ def make_pipeline(reformulation=False):
 
 def test_confidence():
     assert compute_confidence([]) == 0.0
-    assert abs(compute_confidence([0.8]) - 0.8) < 1e-9
+    # mise à l'échelle : [0,80 ; 0,90] -> [0 ; 1]
+    assert abs(compute_confidence([0.85], floor=0.80, ceil=0.90) - 0.5) < 1e-9
+    assert compute_confidence([0.95], floor=0.80, ceil=0.90) == 1.0
+    assert compute_confidence([0.70], floor=0.80, ceil=0.90) == 0.0
     # le 1er passage pèse plus que le 2e
-    assert compute_confidence([0.9, 0.3]) > compute_confidence([0.3, 0.9])
-    assert confidence_label(0.7) == "élevée"
+    assert compute_confidence([0.9, 0.8]) > compute_confidence([0.8, 0.9])
+    assert confidence_label(0.8) == "élevée"
     assert confidence_label(0.5) == "moyenne"
     assert confidence_label(0.2) == "faible"
 

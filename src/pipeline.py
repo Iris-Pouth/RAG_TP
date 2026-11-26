@@ -20,24 +20,27 @@ NO_ANSWER = (
 )
 
 
-def compute_confidence(scores: list[float]) -> float:
+def compute_confidence(scores: list[float], floor: float = config.SCORE_FLOOR,
+                       ceil: float = config.SCORE_CEIL) -> float:
     """Score de confiance entre 0 et 1, calculé à partir des similarités des passages retrouvés.
 
-    Moyenne pondérée : le 1er passage compte pour 1, le 2e pour 1/2, le 3e pour 1/3...
-    Le meilleur passage pèse donc le plus, mais avoir plusieurs passages
-    pertinents augmente aussi la confiance.
+    1. Moyenne pondérée : le 1er passage compte pour 1, le 2e pour 1/2, le 3e pour 1/3...
+       Le meilleur passage pèse donc le plus, mais avoir plusieurs passages
+       pertinents augmente aussi la confiance.
+    2. Mise à l'échelle : les scores du modèle sont resserrés (entre ~0,75 et ~0,92),
+       on ramène donc l'intervalle [floor, ceil] à [0, 1].
     """
     if not scores:
         return 0.0
     weights = [1 / rank for rank in range(1, len(scores) + 1)]
     weighted = sum(w * s for w, s in zip(weights, scores)) / sum(weights)
-    return max(0.0, min(1.0, weighted))
+    return max(0.0, min(1.0, (weighted - floor) / (ceil - floor)))
 
 
 def confidence_label(confidence: float) -> str:
-    if confidence >= 0.60:
+    if confidence >= 0.70:
         return "élevée"
-    if confidence >= 0.45:
+    if confidence >= 0.40:
         return "moyenne"
     return "faible"
 
@@ -94,7 +97,7 @@ class RAGPipeline:
 
         self.store = VectorStore(self.embedder.dimension)
         if chunks:
-            self.store.add(self.embedder.encode([c.text for c in chunks]), chunks)
+            self.store.add(self.embedder.encode_passages([c.text for c in chunks]), chunks)
         self.keywords = build_keyword_index(meds, chunk_ids)
 
         self.store.save(index_dir)
@@ -121,10 +124,15 @@ class RAGPipeline:
 
         # Recherche hybride : si un médicament est cité, on cherche parmi ses passages
         keywords, candidate_ids = self.keywords.match(search_query)
-        query_vector = self.embedder.encode([search_query])[0]
+        query_vector = self.embedder.encode_query(search_query)
         results = self.store.search(query_vector, top_k, among=candidate_ids or None)
 
-        relevant = [(chunk, score) for chunk, score in results if score >= min_score]
+        if keywords:
+            # Le médicament cité est dans la base : ses passages sont pertinents
+            relevant = results
+        else:
+            # Recherche purement sémantique : on exige une forte similarité
+            relevant = [(chunk, score) for chunk, score in results if score >= min_score]
         return Retrieval(
             question=question,
             search_query=search_query,

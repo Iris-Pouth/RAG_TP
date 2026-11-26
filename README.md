@@ -28,11 +28,11 @@ Assistant qui répond à des questions sur les **médicaments commercialisés en
 ```
 
 1. **Données** — `src/bdpm.py` télécharge 6 fichiers de la BDPM (spécialités, compositions, présentations et prix, conditions de prescription, groupes génériques, avis SMR de la HAS) et les assemble par code CIS en une fiche texte par médicament (~13 600 médicaments commercialisés).
-2. **Découpage** — `src/chunker.py` coupe les fiches longues en passages de 500 caractères avec 100 caractères de chevauchement ; le nom du médicament est répété en tête de chaque passage. 500 caractères ≈ 128 tokens, la longueur maximale lue par le modèle d'embeddings : au-delà, la fin du texte serait ignorée.
-3. **Embeddings** — `src/embedder.py` transforme chaque passage en vecteur normalisé de 384 dimensions (`paraphrase-multilingual-MiniLM-L12-v2`).
+2. **Découpage** — `src/chunker.py` coupe les fiches longues en passages de 1 000 caractères avec 150 caractères de chevauchement (la plupart des fiches tiennent en un seul passage) ; le nom du médicament est répété en tête de chaque passage.
+3. **Embeddings** — `src/embedder.py` transforme chaque passage en vecteur normalisé de 384 dimensions avec `multilingual-e5-small`, un modèle entraîné pour la recherche question → document (préfixes `query:` et `passage:`).
 4. **Index** — `src/vector_store.py` stocke les vecteurs dans FAISS (`IndexFlatIP` : produit scalaire = similarité cosinus) ; `src/keywords.py` construit un index des noms de médicaments et des substances actives.
-5. **Recherche hybride** — si la question cite un médicament ou une substance (« Doliprane », « paracétamol »), la recherche vectorielle est limitée à ses passages ; sinon elle porte sur toute la base. Les passages sous le seuil de similarité sont écartés.
-6. **Score de confiance** — moyenne des similarités pondérée par le rang (1, 1/2, 1/3…) : élevée ≥ 60 %, moyenne ≥ 45 %, sinon faible. **Sans passage pertinent, Claude n'est pas appelé** et l'assistant répond qu'il n'a pas l'information.
+5. **Recherche hybride** — si la question cite un médicament ou une substance (« Doliprane », « paracétamol »), la recherche vectorielle est limitée à ses passages ; sinon elle porte sur toute la base et seuls les passages très similaires (score ≥ 0,85) sont gardés.
+6. **Score de confiance** — moyenne des similarités pondérée par le rang (1, 1/2, 1/3…), ramenée de l'intervalle [0,80 ; 0,90] à [0 ; 100 %] : élevée ≥ 70 %, moyenne ≥ 40 %, sinon faible. **Sans passage pertinent, Claude n'est pas appelé** et l'assistant répond qu'il n'a pas l'information.
 7. **Génération** — `src/llm.py` envoie à Claude les passages numérotés, la question et l'historique ; la réponse s'affiche en streaming et cite ses sources `[1]`, `[2]`.
 8. **Historique et reformulation** — les 3 derniers échanges sont conservés ; une question de suivi (« et son prix ? ») est d'abord réécrite en question autonome pour que la recherche trouve le bon médicament.
 
@@ -99,7 +99,9 @@ Les tests utilisent des fichiers BDPM miniatures et remplacent le modèle d'embe
 
 - **Pourquoi une recherche hybride ?** Les embeddings captent bien le sens (« est-il remboursé ? ») mais confondent les noms propres proches (DOLIPRANE / DAFALGAN). Le filtre par mots-clés garantit qu'on cherche dans les bons médicaments.
 - **Pourquoi répéter le nom dans chaque passage ?** Un passage du milieu d'une fiche (la liste des prix, par exemple) ne dirait sinon pas de quel médicament il parle.
-- **Pourquoi `IndexFlatIP` ?** Recherche exacte, rapide pour ~20 000 vecteurs ; avec des vecteurs normalisés, le produit scalaire est la similarité cosinus.
+- **Pourquoi e5 plutôt que MiniLM ?** La première version utilisait `paraphrase-multilingual-MiniLM-L12-v2`, entraîné à comparer deux phrases entre elles. Testé sur la vraie base, il classait mal les fiches (« avis de la HAS sur le Doliprane » ne trouvait aucun passage Doliprane) et ne lisait que 128 tokens. `multilingual-e5-small`, de même taille mais entraîné pour la recherche, retrouve les bonnes fiches et lit 512 tokens.
+- **Pourquoi remettre les scores à l'échelle ?** Les similarités d'e5 sont resserrées (~0,75 pour un texte sans rapport, ~0,90 pour un texte très proche) : un score brut de 0,83 ne veut pas dire « 83 % de confiance ».
+- **Pourquoi `IndexFlatIP` ?** Recherche exacte, rapide pour quelques dizaines de milliers de vecteurs ; avec des vecteurs normalisés, le produit scalaire est la similarité cosinus.
 - **Limites de la BDPM** — elle ne contient pas les notices (posologie, effets indésirables, contre-indications) : l'assistant le dit et oriente vers un professionnel de santé.
 - **Claude** — modèle et niveau de réflexion (`CLAUDE_EFFORT`) réglables dans `.env`. En cas de refus du modèle, l'API relance la requête sur un modèle de secours (`USE_FALLBACK`).
 

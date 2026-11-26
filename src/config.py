@@ -13,20 +13,22 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("DATA_DIR", ROOT_DIR / "data" / "bdpm"))  # fichiers BDPM bruts
 INDEX_DIR = Path(os.getenv("INDEX_DIR", ROOT_DIR / "index"))  # index FAISS sauvegardé
 
-# Embeddings : modèle multilingue, vecteurs de 384 dimensions
-EMBEDDING_MODEL = os.getenv(
-    "EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-)
+# Embeddings : modèle multilingue entraîné pour la recherche question -> document,
+# vecteurs de 384 dimensions, lit jusqu'à 512 tokens (~2 000 caractères)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-small")
 
-# Découpage des fiches (en caractères). Le modèle d'embeddings tronque les textes
-# au-delà de 128 tokens (~500 caractères) : des passages plus longs seraient mal représentés.
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 500))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 100))
+# Découpage des fiches (en caractères) : la plupart des fiches tiennent en un passage
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1000))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 150))
 
 # Recherche
 TOP_K = int(os.getenv("TOP_K", 5))
-# En dessous de ce score de similarité, un passage est jugé non pertinent
-MIN_SCORE = float(os.getenv("MIN_SCORE", 0.30))
+# Si la question ne cite aucun médicament, un passage doit dépasser ce score pour être gardé.
+# Les scores du modèle e5 sont resserrés : ~0,75 pour un texte sans rapport, ~0,90 pour un très proche.
+MIN_SCORE = float(os.getenv("MIN_SCORE", 0.85))
+# Bornes utilisées pour convertir un score de similarité en confiance de 0 à 100 %
+SCORE_FLOOR = float(os.getenv("SCORE_FLOOR", 0.80))  # score -> 0 %
+SCORE_CEIL = float(os.getenv("SCORE_CEIL", 0.90))  # score -> 100 %
 
 # LLM : Claude
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5-5")
